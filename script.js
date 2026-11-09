@@ -143,6 +143,12 @@
     let nextUrl = null;
     let sourceError = null;
     let prefetchPromise = null;
+    // Le renderer vit aussi longtemps que la conversation, même après fermeture
+    // du chatbot ou lorsque les premiers échanges sortent de l'historique envoyé.
+    let foundersImageShown = false;
+    const foundersImageUrl = 'https://cdn.prod.website-files.com/67f3c6fa3878c7fd694d3857/6af20c7501b1fc0ca6f615d7_martin-mordue.avif';
+    const foundersTopics = new Set(['fondateurs', 'suzanne_blog', 'suzanne_parcours',
+      'suzanne_gouts', 'martin_parcours', 'martin_gouts', 'origine']);
 
     const text = value => typeof value === 'string' ? value.trim() : '';
     const titleKey = value => text(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -443,6 +449,11 @@
         ? visitorText(data.follow_up_question, 'Pouvez-vous préciser ce que vous recherchez ?')
         : '';
       const showFollowUp = followUp && followUp !== conclusion && followUp !== visitorText(data.answer);
+      const showFoundersImage = !foundersImageShown && data.status === 'ok'
+        && data.criteria?.conversation_mode === 'knowledge'
+        && data.criteria?.knowledge_scope === 'laffiche'
+        && Array.isArray(data.criteria.knowledge_topics)
+        && data.criteria.knowledge_topics.some(topic => foundersTopics.has(topic));
       // La réponse doit être empilée avant la première carte et la première puce.
       if (showRecommendations) reply.element.setAttribute('data-ai-search-has-cards', '');
       const layout = document.createElement('div');
@@ -462,7 +473,7 @@
         }
       }
       await introDone;
-      if (!showRecommendations && !conclusion && !showFollowUp) return rendered;
+      if (!showRecommendations && !conclusion && !showFollowUp && !showFoundersImage) return rendered;
       reply.element.appendChild(layout);
       queueResponseScroll();
 
@@ -528,6 +539,25 @@
         question.appendChild(questionText);
         layout.appendChild(question);
         await streamText(questionText, followUp, 20);
+      }
+      if (showFoundersImage) {
+        const portrait = document.createElement('img');
+        portrait.setAttribute('data-ai-search-founders-image', '');
+        portrait.alt = 'Suzanne et Martin, fondateurs de L’Affiche';
+        portrait.decoding = 'async';
+        Object.assign(portrait.style, {
+          display: 'block', width: '100%', maxWidth: '34rem', height: 'auto',
+          alignSelf: 'flex-start', borderRadius: '0.75rem',
+        });
+        portrait.addEventListener('load', queueResponseScroll, { once: true });
+        portrait.addEventListener('error', () => {
+          portrait.remove();
+          if (!layout.childElementCount) layout.remove();
+        }, { once: true });
+        portrait.src = foundersImageUrl;
+        layout.appendChild(portrait);
+        foundersImageShown = true;
+        queueResponseScroll();
       }
       return rendered;
     };
