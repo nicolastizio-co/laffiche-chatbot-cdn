@@ -436,8 +436,15 @@
 
     const render = async (reply, data, requestId, introDone) => {
       const results = data.results.filter(show => show && typeof show === 'object' && !Array.isArray(show));
+      // Une précision garde le spectacle en mémoire, sans répéter sa carte ni sa raison.
+      const showRecommendations = results.length > 0 && data.criteria?.conversation_mode !== 'detail';
+      const conclusion = results.length ? visitorText(data.conclusion) : '';
+      const followUp = data.follow_up_question
+        ? visitorText(data.follow_up_question, 'Pouvez-vous préciser ce que vous recherchez ?')
+        : '';
+      const showFollowUp = followUp && followUp !== conclusion && followUp !== visitorText(data.answer);
       // La réponse doit être empilée avant la première carte et la première puce.
-      if (results.length) reply.element.setAttribute('data-ai-search-has-cards', '');
+      if (showRecommendations) reply.element.setAttribute('data-ai-search-has-cards', '');
       const layout = document.createElement('div');
       layout.setAttribute('data-ai-search-recommendations', '');
       let rendered = 0;
@@ -445,7 +452,7 @@
       let carousel = null;
       let catalogError = sourceError;
 
-      if (results.length && !catalogError) {
+      if (showRecommendations && !catalogError) {
         try {
           selected = await resolveSlides(results);
           const found = selected.filter(item => item.slide);
@@ -455,10 +462,11 @@
         }
       }
       await introDone;
+      if (!showRecommendations && !conclusion && !showFollowUp) return rendered;
       reply.element.appendChild(layout);
       queueResponseScroll();
 
-      if (results.length) {
+      if (showRecommendations) {
         if (carousel) {
           layout.appendChild(carousel.element);
           queueResponseScroll();
@@ -505,7 +513,6 @@
         }
         await appendReasons(layout, results);
       }
-      const conclusion = results.length ? visitorText(data.conclusion) : '';
       if (conclusion) {
         const closing = document.createElement('p');
         closing.setAttribute('data-ai-search-conclusion', '');
@@ -514,10 +521,7 @@
         layout.appendChild(closing);
         await streamText(conclusionText, conclusion, 20);
       }
-      const followUp = data.follow_up_question
-        ? visitorText(data.follow_up_question, 'Pouvez-vous préciser ce que vous recherchez ?')
-        : '';
-      if (followUp && followUp !== conclusion && followUp !== visitorText(data.answer)) {
+      if (showFollowUp) {
         const question = document.createElement('p');
         question.setAttribute('data-ai-search-follow-up', '');
         const questionText = document.createTextNode('');
