@@ -32,8 +32,8 @@
     return /\b(?:webflow|algolia|cms|catalogue|identifiants?|synchronisation|donnees?|candidats?|match[_ -]?status|object[_ -]?id|api|schema|scores?|controle interne|verification interne)\b/.test(normalized)
       || /\b[0-9a-f]{24}\b/i.test(value);
   };
-  const visitorText = (value, fallback = '') => {
-    const content = shortText(value, 2000);
+  const visitorText = (value, fallback = '', max = 2000) => {
+    const content = shortText(value, max);
     return content && !hasInternalCopy(content) ? content : fallback;
   };
   function assistantMemory(data) {
@@ -481,13 +481,20 @@
       const next = group.querySelector('[data-swiper-next]');
       const pagination = group.querySelector('.swiper-pagination');
       pagination?.replaceChildren();
+      const single = found.length === 1;
+      for (const control of [prev, next, pagination]) {
+        if (control && single) {
+          control.hidden = true;
+          control.style.setProperty('display', 'none', 'important');
+        }
+      }
       for (const button of [prev, next]) {
         if (!button) continue;
         button.classList.remove('swiper-button-disabled', 'swiper-button-lock', 'swiper-button-hidden');
         button.removeAttribute('disabled');
         button.removeAttribute('aria-disabled');
       }
-      return { element: clone, wrap, prev, next, pagination };
+      return { element: clone, wrap, prev, next, pagination, single };
     }
 
     async function appendReasons(parent, shows) {
@@ -519,10 +526,16 @@
     }
 
     const render = async (reply, data, requestId, introDone) => {
-      const results = data.results.filter(show => show && typeof show === 'object' && !Array.isArray(show));
-      // Une précision garde le spectacle en mémoire, sans répéter sa carte ni sa raison.
-      const showRecommendations = results.length > 0 && data.criteria?.conversation_mode !== 'detail';
-      const conclusion = results.length ? visitorText(data.conclusion) : '';
+      let results = data.results.filter(show => show && typeof show === 'object' && !Array.isArray(show));
+      const detailMode = data.criteria?.conversation_mode === 'detail';
+      if (detailMode) {
+        const target = data.detail_target?.webflow_id;
+        // Ne jamais deviner la première fiche d'une sélection ambiguë.
+        results = target ? results.filter(show => (show.webflow_id || show.id) === target).slice(0, 1)
+          : results.length === 1 ? results : [];
+      }
+      const showRecommendations = results.length > 0;
+      const conclusion = !detailMode && results.length ? visitorText(data.conclusion) : '';
       const followUp = data.follow_up_question
         ? visitorText(data.follow_up_question, 'Pouvez-vous préciser ce que vous recherchez ?')
         : '';
@@ -583,9 +596,11 @@
                 speed: 300,
                 freeMode: { enabled: true, sticky: true },
                 grabCursor: false,
+                allowTouchMove: !carousel.single,
+                watchOverflow: true,
                 a11y: false,
-                navigation: { prevEl: carousel.prev, nextEl: carousel.next },
-                ...(carousel.pagination ? { pagination: {
+                navigation: carousel.single ? false : { prevEl: carousel.prev, nextEl: carousel.next },
+                ...(!carousel.single && carousel.pagination ? { pagination: {
                   el: carousel.pagination, type: 'bullets', clickable: true,
                 } } : {}),
               });
@@ -598,7 +613,7 @@
             const fallback = document.createElement('p');
             fallback.setAttribute('data-ai-search-missing-cards', '');
             cardSlot.appendChild(fallback);
-            const message = catalogError
+            const message = detailMode ? 'L’affiche ne s’affiche pas pour le moment. Les informations du spectacle restent disponibles ci-dessus.' : catalogError
               ? 'Les fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.'
               : 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.';
             const messageNode = document.createTextNode('');
@@ -615,7 +630,7 @@
             await streamText(noticeText, 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez toutes les suggestions ci-dessous.', 20);
           }
         })();
-        await appendReasons(layout, results);
+        if (!detailMode) await appendReasons(layout, results);
       }
       if (conclusion) {
         const closing = document.createElement('p');
@@ -1232,9 +1247,11 @@
             ? 'Voici un spectacle qui pourrait vous plaire.'
             : `Voici ${data.results.length} spectacles qui pourraient vous plaire.`
           : 'Je n’ai pas trouvé de spectacle pour cette recherche. Essayez une autre date ou précisez vos envies.';
-        const intro = onlyAlternatives ? introFallback : visitorText(data.answer, introFallback);
+        const intro = onlyAlternatives ? introFallback : visitorText(data.answer, introFallback,
+          data.criteria?.conversation_mode === 'detail' ? 6000 : 2000);
         const introNode = document.createTextNode('');
         reply.content.replaceChildren(introNode);
+        if (data.criteria?.conversation_mode === 'detail') reply.content.style.whiteSpace = 'pre-line';
         reply.content.setAttribute('aria-busy', 'true');
         const introDone = streamText(introNode, intro, 28).finally(() => reply.content.removeAttribute('aria-busy'));
         reply.element.setAttribute('data-ai-search-response-status', (onlyAlternatives ? 'no_results' : data.status) || 'success');

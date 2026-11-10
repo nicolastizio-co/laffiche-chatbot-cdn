@@ -17,7 +17,7 @@ function catalog(slug, next = '') {
  return `<!doctype html><div data-ai-search-swiper-source hidden><div data-swiper-group>
  <div data-swiper-wrap><div class="swiper-wrapper w-dyn-items">
  <div class="swiper-slide" data-ai-search-webflow-id="id-${slug}" data-ai-search-show-slug="${slug}">
- <a href="/spectacles/${slug}"><span class="show_title_small">Spectacle ${slug}</span></a></div>
+ <a href="/spectacles/${slug}"><img alt="Affiche ${slug}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='250'%3E%3Crect width='180' height='250' fill='%23dc4030'/%3E%3C/svg%3E"><span class="show_title_small">Spectacle ${slug}</span></a></div>
  </div></div><button data-swiper-prev></button><button data-swiper-next></button>
  <div class="swiper-pagination"></div></div>${next ? `<a class="w-pagination-next" href="${next}">Suite</a>` : ''}</div>`;
 }
@@ -35,8 +35,9 @@ async function setup(browser, script, options = {}) {
    const payload = request.postDataJSON();
    if (responseMode === 'pending') await new Promise(resolve => { release = resolve; });
    return route.fulfill({headers:{'access-control-allow-origin':'*'},contentType:'application/json',body:JSON.stringify({response:{
-    status:'ok', alternatives:[], conversation_id:payload.conversation_id, answer:'Voici la réponse.',
-    results: responseMode === 'empty' ? [] : [{webflow_id:`id-${resultSlug}`,slug:resultSlug,title:`Spectacle ${resultSlug}`,reason:'Une proposition.'}],
+    status:'ok', alternatives:[], conversation_id:payload.conversation_id, answer:options.answer || 'Voici la réponse.',
+    results: responseMode === 'empty' ? [] : options.results || [{webflow_id:`id-${resultSlug}`,slug:resultSlug,title:`Spectacle ${resultSlug}`,reason:'Une proposition.'}],
+    detail_target: options.target ? {webflow_id:options.target} : undefined,
     criteria:{conversation_mode:responseMode === 'detail' ? 'detail' : 'search'},
    }})});
   }
@@ -64,6 +65,38 @@ async function setup(browser, script, options = {}) {
 for(const script of scripts) test(`cartes à la demande : ${script}`,async t=>{
  const browser = await chromium.launch({channel:'chrome',headless:true});
  try {
+  await t.test('fiche détail : une affiche, sans pagination ni raisons, et texte complet',async()=>{
+   const answer='Le spectacle et son histoire. '.repeat(90)+'\n\nDurée : 1 h 35.';
+   const h=await setup(browser,script,{answer});
+   try {
+    await h.submit('a','detail');
+    const response=h.page.locator('[data-ai-search-message="assistant"]').last();
+    assert.equal(await response.locator('.swiper-slide').count(),1);
+    assert.equal(await response.locator('.swiper-slide img').getAttribute('alt'),'Affiche a');
+    assert.equal(await response.locator('[data-ai-search-reasons]').count(),0);
+    assert.equal(await response.locator('[data-swiper-next]').isVisible(),false);
+    assert.equal(await response.locator('.swiper-pagination').isVisible(),false);
+    assert.ok((await response.textContent()).includes('Durée : 1 h 35.'));
+    await h.submit('b');
+    assert.equal(await h.page.locator('[data-ai-search-reasons]').count(),1);
+   } finally {await h.page.close();}
+  });
+  await t.test('une réponse détail contenant des résultats en trop ne montre que la cible',async()=>{
+   const h=await setup(browser,script,{target:'id-b',results:['a','b','c'].map(slug=>({webflow_id:`id-${slug}`,slug,title:`Spectacle ${slug}`}))});
+   try {
+    await h.submit('a','detail');
+    assert.deepEqual(await h.page.locator('[data-ai-search-result-swiper] .show_title_small').allTextContents(),['Spectacle b']);
+    assert.equal(await h.page.locator('[data-ai-search-reasons]').count(),0);
+   } finally {await h.page.close();}
+  });
+  await t.test('plusieurs résultats détail sans cible ne provoquent pas de sélection arbitraire',async()=>{
+   const h=await setup(browser,script,{results:['a','b'].map(slug=>({webflow_id:`id-${slug}`,slug,title:slug}))});
+   try {
+    await h.submit('a','detail');
+    assert.equal(await h.page.locator('[data-ai-search-result-swiper]').count(),0);
+    assert.ok((await h.page.locator('[data-ai-search-message="assistant"]').last().textContent()).includes('Voici la réponse.'));
+   } finally {await h.page.close();}
+  });
   await t.test('repos sans requête ; préparation pendant le webhook, deux chargements maximum et cache',async()=>{
    const h=await setup(browser,script,{delay:40});
    try {

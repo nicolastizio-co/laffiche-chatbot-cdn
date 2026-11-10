@@ -31,3 +31,10 @@ La photo des fondateurs utilise l’URL fixe définie dans `foundersImageUrl`.
 Elle s’affiche après le texte de la première réponse sur les fondateurs, Suzanne,
 Martin ou l’origine du projet. L’indicateur reste actif tant que la conversation
 existe, y compris après fermeture du panneau ou troncature de son historique.
+
+Une demande sur un spectacle précis utilise `criteria.conversation_mode="detail"`
+et `detail_target.webflow_id`. Elle affiche uniquement la carte de ce spectacle,
+avec son affiche, sans flèches, pagination, liste de raisons ni conclusion de
+sélection. Le texte détaillé conserve ses paragraphes (jusqu’à 6 000 caractères).
+En cas de résultats ambigus sans cible, aucune carte n’est choisie arbitrairement.
+Les demandes explicites de spectacles similaires conservent le parcours de sélection.
