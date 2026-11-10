@@ -6,7 +6,7 @@
     test: 'https://n8n.srv1136783.hstgr.cloud/webhook-test/recherche-ia-webflow',
   };
   const TIMEOUT_MS = 90_000;
-  const SCRIPT_VERSION = '2026-11-11-detail-layout';
+  const SCRIPT_VERSION = '2026-11-11-detail-title-unicode';
   function shuffleLoadingMessages(phrases, previousMessage = '') {
     const messages = [...phrases];
     for (let index = messages.length - 1; index > 0; index--) {
@@ -52,20 +52,44 @@
     }
     return /^[a-z0-9][a-z0-9-]{0,199}$/i.test(slug) ? `/spectacles/${slug}?utm_source=chatbot` : '';
   };
+  function titleTextMap(value) {
+    let folded = '', offset = 0;
+    const starts = [], ends = [];
+    for (const character of value) {
+      const start = offset;
+      offset += character.length;
+      const normalized = character.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('fr')
+        .replace(/[’‘ʼ]/g, "'").replace(/[‐‑–—]/g, '-')
+        .replace(/[\u200b-\u200d\u2060\ufeff]/g, '').replace(/\s/g, ' ');
+      if (!normalized || normalized === ' ' && folded.endsWith(' ')) {
+        if (ends.length) ends[ends.length - 1] = offset;
+        continue;
+      }
+      folded += normalized;
+      for (let i = 0; i < normalized.length; i++) { starts.push(start); ends.push(offset); }
+    }
+    return {folded, starts, ends};
+  }
   function linkDetailTitle(content, data) {
     const show = detailShow(data), href = showHref(show);
     const title = shortText(show?.title, 200), text = content.textContent;
     if (!title || !href) return;
-    const index = text.toLocaleLowerCase('fr').indexOf(title.toLocaleLowerCase('fr'));
-    if (index < 0 || /[\p{L}\p{N}]/u.test(text[index - 1] || '')
-      || /[\p{L}\p{N}]/u.test(text[index + title.length] || '')) return;
+    const mapped = titleTextMap(text), needle = titleTextMap(title).folded;
+    if (!needle) return;
+    let match = mapped.folded.indexOf(needle);
+    while (match >= 0 && (/[\p{L}\p{N}]/u.test(mapped.folded[match - 1] || '')
+      || /[\p{L}\p{N}]/u.test(mapped.folded[match + needle.length] || ''))) {
+      match = mapped.folded.indexOf(needle, match + 1);
+    }
+    if (match < 0) return;
+    const index = mapped.starts[match], end = mapped.ends[match + needle.length - 1];
     const link = document.createElement('a');
     link.href = href;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.textContent = text.slice(index, index + title.length);
+    link.textContent = text.slice(index, end);
     content.replaceChildren(document.createTextNode(text.slice(0, index)), link,
-      document.createTextNode(text.slice(index + title.length)));
+      document.createTextNode(text.slice(end)));
   }
   function assistantMemory(data) {
     const lines = [`Réponse : ${visitorText(data.answer, 'Voici quelques idées de spectacles.').slice(0, 500)}`];

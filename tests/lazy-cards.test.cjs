@@ -90,6 +90,28 @@ for(const script of scripts) test(`cartes à la demande : ${script}`,async t=>{
     assert.ok(!(await response.textContent()).includes('Les informations du spectacle demandé'));
    } finally {await h.page.close();}
   });
+  await t.test('liens de titres : apostrophes, accents Unicode et espaces, sans modifier le texte',async()=>{
+   const title="J'ai toujours rêvé d'être Meryl Streep ";
+   for(const mention of ["J’ai toujours rêvé d’être Meryl Streep", "J’ai toujours rêvé d’être Meryl\u00a0Streep", "Jʼai toujours rêvé dʼêtre Meryl  Streep"]){
+    const answer=`« ${mention} » est une comédie musicale. ${mention} vous surprendra.`;
+    const h=await setup(browser,script,{answer,results:[{webflow_id:'id-meryl',slug:'meryl-streep',title,image_url:'https://example.test/poster.webp'}]});
+    try{
+     await h.submit('meryl','detail');
+     const intro=h.page.locator('[data-ai-search-message="assistant"] [data-ai-search-text]').last();
+     assert.equal(await intro.textContent(),answer);
+     assert.equal(await intro.locator('a').count(),1);
+     assert.equal(await intro.locator('a').textContent(),mention);
+     assert.equal(await intro.locator('a').getAttribute('href'),'/spectacles/meryl-streep?utm_source=chatbot');
+    }finally{await h.page.close();}
+   }
+  });
+  await t.test('un titre partiel est ignoré avant la première mention complète',async()=>{
+   const h=await setup(browser,script,{answer:'Looping puis Loop : une histoire.',results:[{webflow_id:'id-loop',slug:'loop',title:'Loop',image_url:'https://example.test/poster.webp'}]});
+   try{
+    await h.submit('loop','detail');
+    assert.equal(await h.page.locator('[data-ai-search-message="assistant"] [data-ai-search-text]').innerHTML(),'Looping puis <a href="/spectacles/loop?utm_source=chatbot" target="_blank" rel="noopener">Loop</a> : une histoire.');
+   }finally{await h.page.close();}
+  });
   await t.test('un visuel invalide ne masque pas le texte ni son lien et ne devient pas du HTML',async()=>{
    const h=await setup(browser,script,{failures:20,answer:'The Loop reste accessible.',results:[{
     webflow_id:'id-loop',slug:'the-loop',title:'The Loop',image_url:'javascript:alert(1)',
