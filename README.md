@@ -46,7 +46,7 @@ Un problème de cartes ne produit pas de message de suggestions en mode détail.
 Le tarif transmis par le workflow est conservé.
 
 Publication du 11 novembre 2026 : Webflow charge la version figée
-`https://cdn.jsdelivr.net/gh/nicolastizio-co/laffiche-chatbot-cdn@8bda6b1/script.min.js`.
+`https://cdn.jsdelivr.net/gh/nicolastizio-co/laffiche-chatbot-cdn@d941f95/script.min.js`.
 Le chemin `@main/script.min.js` restait ancien après une purge réussie.
 Pour une prochaine mise à jour, modifier aussi cette référence dans le Footer Code
 Webflow et publier les domaines ; pousser sur `main` seul ne met plus à jour le site.
