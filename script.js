@@ -127,22 +127,32 @@
   }
 
   function createShowCardsRenderer(root, streamText, reducedMotion, queueResponseScroll) {
-    // La Collection List Webflow reste la seule source du HTML des cartes.
-    // Le modèle est capturé dans le fil avant que celui-ci soit vidé à l'initialisation.
-    // Ses pages sont lues à la demande, puis les slides utiles sont copiées dans chaque réponse.
-    const source = root.querySelector('[data-ai-search-swiper-source]');
+    // Migration : l'ancien bloc embarqué reste compatible tant que l'URL dédiée
+    // n'est pas configurée. Sans bloc embarqué, /chatbot-cartes est la source.
+    const embeddedSource = root.querySelector('[data-ai-search-swiper-source]');
+    const configuredUrl = root.getAttribute('data-ai-search-catalog-url');
+    const useEmbeddedSource = embeddedSource && !configuredUrl;
     const slidesById = new Map();
     const slidesBySlug = new Map();
     const slidesByTitle = new Map();
     const duplicateTitles = new Set();
     const loadedPages = new Set();
-    const nextPageByUrl = new Map();
     const catalogOrigin = window.location.origin;
-    const catalogPath = window.location.pathname;
-    const maxPagesPerSearch = 20;
+    const maxCatalogPages = 20;
+    const catalogBudgetMs = 20000;
+    let catalogPath = '';
     let nextUrl = null;
     let sourceError = null;
-    let prefetchPromise = null;
+    let shellHtml = '';
+    try {
+      const url = new URL(useEmbeddedSource ? window.location.href
+        : configuredUrl || '/chatbot-cartes', catalogOrigin);
+      if (url.origin !== catalogOrigin || !['https:', 'http:'].includes(url.protocol)
+        || url.username || url.password) throw Error();
+      url.hash = '';
+      catalogPath = url.pathname;
+      nextUrl = url.href;
+    } catch (error) { sourceError = error; }
     // Le renderer vit aussi longtemps que la conversation, même après fermeture
     // du chatbot ou lorsque les premiers échanges sortent de l'historique envoyé.
     let foundersImageShown = false;
@@ -173,7 +183,7 @@
       const supplied = text(show?.slug) || slugFromUrl(text(show?.url));
       if (supplied) return supplied;
       const byTitle = slidesByTitle.get(titleKey(show?.title));
-      return byTitle ? slideSlug(byTitle) : '';
+      return byTitle ? byTitle.slug : '';
     };
 
     function slideField(slide, name) {
@@ -189,40 +199,48 @@
       return link ? slugFromUrl(link.getAttribute('href')) : '';
     }
 
-    function indexPage(doc, pageUrl, advanceCursor = true) {
-      const catalog = doc.querySelector('[data-ai-search] [data-ai-search-swiper-source]');
+    function indexPage(doc, pageUrl) {
+      const catalog = doc.querySelector('[data-ai-search-swiper-source]');
       const list = catalog?.querySelector('[data-swiper-wrap] .swiper-wrapper.w-dyn-items');
       if (!list) throw Error();
+      if (!shellHtml) {
+        const shell = catalog.cloneNode(true);
+        shell.querySelector('[data-swiper-wrap] .swiper-wrapper.w-dyn-items').replaceChildren();
+        shell.querySelectorAll('.w-pagination-wrapper, [data-ai-search-catalog-next], script, iframe, object, embed')
+          .forEach(node => node.remove());
+        shellHtml = shell.outerHTML;
+      }
       for (const slide of list.children) {
         if (!slide.classList.contains('swiper-slide')) continue;
         const id = slideField(slide, 'data-ai-search-webflow-id');
         const slug = slideSlug(slide);
         const title = titleKey(slide.querySelector('.show_title_small')?.textContent
           || slide.querySelector('a.show_item_link[aria-label]')?.getAttribute('aria-label'));
-        if (id && !slidesById.has(id)) slidesById.set(id, slide);
-        if (slug && !slidesBySlug.has(slug)) slidesBySlug.set(slug, slide);
+        // Garder du texte, jamais des nœuds dont ownerDocument retient la page complète.
+        const record = { id, slug, html: slide.outerHTML };
+        if (id && !slidesById.has(id)) slidesById.set(id, record);
+        if (slug && !slidesBySlug.has(slug)) slidesBySlug.set(slug, record);
         if (title && !duplicateTitles.has(title)) {
-          if (slidesByTitle.has(title)) {
+          const previous = slidesByTitle.get(title);
+          if (previous && !((id && previous.id === id) || (slug && previous.slug === slug))) {
             slidesByTitle.delete(title);
             duplicateTitles.add(title);
-          } else slidesByTitle.set(title, slide);
+          } else if (!previous) slidesByTitle.set(title, record);
         }
       }
       const next = catalog.querySelector('[data-ai-search-catalog-next][href], .w-pagination-next[href]');
-      const candidate = next ? new URL(next.getAttribute('href'), pageUrl) : null;
-      const followingUrl = candidate && candidate.origin === catalogOrigin && candidate.pathname === catalogPath
-        ? candidate.href : null;
-      nextPageByUrl.set(pageUrl, followingUrl);
-      if (advanceCursor) nextUrl = followingUrl;
+      let candidate = null;
+      try { if (next) candidate = new URL(next.getAttribute('href'), pageUrl); } catch {}
+      if (candidate) candidate.hash = '';
       loadedPages.add(pageUrl);
-      return { hasNext: Boolean(followingUrl), slideCount: list.children.length };
+      nextUrl = candidate && candidate.origin === catalogOrigin && candidate.pathname === catalogPath
+        && !candidate.username && !candidate.password && !loadedPages.has(candidate.href)
+        ? candidate.href : null;
     }
 
-    if (source) {
-      try { indexPage(document, window.location.href); }
+    if (useEmbeddedSource && !sourceError) {
+      try { indexPage(document, nextUrl); }
       catch (error) { sourceError = error; }
-    } else {
-      sourceError = true;
     }
 
     function findSlide(show) {
@@ -233,7 +251,7 @@
       const bySlug = slug ? slidesBySlug.get(slug) : null;
       // Si un ID Webflow est exposé dans le CMS, il doit confirmer le slug.
       if (bySlug && id) {
-        const sourceId = slideField(bySlug, 'data-ai-search-webflow-id');
+        const sourceId = bySlug.id;
         if (sourceId && sourceId !== id) return null;
       }
       if (bySlug) return bySlug;
@@ -243,65 +261,42 @@
       if (!slug) {
         const byTitle = slidesByTitle.get(titleKey(show?.title));
         if (byTitle) {
-          const sourceId = slideField(byTitle, 'data-ai-search-webflow-id');
+          const sourceId = byTitle.id;
           if (!id || !sourceId || sourceId === id) return byTitle;
         }
       }
       return null;
     }
 
-    async function loadNextPage(url, advanceCursor = true) {
+    async function loadNextPage(url, remainingMs) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12000);
+      const timeout = setTimeout(() => controller.abort(), Math.min(12000, remainingMs));
       try {
         const response = await fetch(url, {
           method: 'GET', credentials: 'same-origin', signal: controller.signal,
           headers: { Accept: 'text/html' },
         });
         if (!response.ok) throw Error();
-        if (new URL(response.url).origin !== catalogOrigin) throw Error();
-        const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
-        return indexPage(doc, response.url, advanceCursor);
+        const finalUrl = new URL(response.url);
+        finalUrl.hash = '';
+        if (finalUrl.origin !== catalogOrigin || finalUrl.pathname !== catalogPath) throw Error();
+        const html = await response.text();
+        if (html.length > 2000000) throw Error();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        indexPage(doc, finalUrl.href);
+        loadedPages.add(url);
+        if (loadedPages.has(nextUrl)) nextUrl = null;
       } finally { clearTimeout(timeout); }
     }
 
-    function warmCatalog() {
-      if (prefetchPromise || !nextUrl || sourceError) return prefetchPromise;
-      const seed = new URL(nextUrl);
-      const pageEntry = [...seed.searchParams].find(([key, value]) => /_page$/.test(key) && /^\d+$/.test(value));
-      if (!pageEntry) return null;
-      const [pageKey, firstValue] = pageEntry;
-      const firstPage = Number(firstValue);
-      if (!Number.isSafeInteger(firstPage) || firstPage < 2) return null;
-      let pageCursor = firstPage;
-      let lastPage = firstPage + maxPagesPerSearch - 1;
-      const worker = async () => {
-        while (pageCursor <= lastPage) {
-          const page = pageCursor++;
-          const target = new URL(seed.href);
-          target.searchParams.set(pageKey, String(page));
-          if (loadedPages.has(target.href)) {
-            if (!nextPageByUrl.get(target.href)) lastPage = Math.min(lastPage, page);
-            continue;
-          }
-          try {
-            const info = await loadNextPage(target.href, false);
-            if (!info.hasNext || !info.slideCount) lastPage = Math.min(lastPage, page);
-          } catch {}
-        }
-      };
-      prefetchPromise = Promise.all(Array.from({ length: 4 }, worker)).catch(() => {});
-      return prefetchPromise;
-    }
-
     async function resolveSlides(shows) {
-      if (shows.some(show => !findSlide(show)) && prefetchPromise) await prefetchPromise;
-      let pagesRead = 0;
-      while (shows.some(show => !findSlide(show)) && nextUrl && pagesRead < maxPagesPerSearch) {
-        const url = nextUrl;
-        if (loadedPages.has(url)) nextUrl = nextPageByUrl.get(url) || null;
-        else await loadNextPage(url);
-        pagesRead++;
+      const deadline = Date.now() + catalogBudgetMs;
+      // Une requête à la fois, seulement si une recommandation manque ; ni
+      // préchargement à l'envoi, ni lecture spéculative des pages suivantes.
+      while (shows.some(show => !findSlide(show)) && nextUrl && loadedPages.size < maxCatalogPages) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        await loadNextPage(nextUrl, remainingMs);
       }
       return shows.map(show => ({ show, slide: findSlide(show) }));
     }
@@ -331,7 +326,9 @@
     }
 
     function cleanSlide(original, show, requestId, index) {
-      const slide = document.importNode(original, true);
+      const template = document.createElement('template');
+      template.innerHTML = original.html;
+      const slide = template.content.firstElementChild;
       slide.removeAttribute('style');
       slide.classList.remove('swiper-slide-active', 'swiper-slide-next', 'swiper-slide-prev',
         'swiper-slide-visible', 'swiper-slide-fully-visible');
@@ -367,7 +364,9 @@
     }
 
     function buildSwiper(found, requestId) {
-      const clone = source.cloneNode(true);
+      const template = document.createElement('template');
+      template.innerHTML = shellHtml;
+      const clone = template.content.firstElementChild;
       clone.removeAttribute('data-ai-search-swiper-source');
       clone.setAttribute('data-ai-search-result-swiper', '');
       clone.removeAttribute('hidden');
@@ -561,7 +560,6 @@
       }
       return rendered;
     };
-    render.warmCatalog = warmCatalog;
     return render;
   }
 
@@ -1085,7 +1083,6 @@
       input.value = '';
       syncMirrors();
       setBusy(true);
-      renderShowCards.warmCatalog();
       root.setAttribute('data-ai-search-status', 'loading');
       startTimer(startedAt);
       const loadingInterval = setInterval(() => {

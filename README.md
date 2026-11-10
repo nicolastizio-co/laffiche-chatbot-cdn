@@ -13,6 +13,18 @@ npx --yes --package terser@5.44.0 terser script.js --compress --mangle --output 
 Après publication, purger les deux URL jsDelivr et vérifier que `script.min.js`
 contient bien la modification avant de confirmer sa disponibilité sur le site.
 
+La migration des cartes vers une page dédiée `/chatbot-cartes` est décrite dans
+[WEBFLOW.md](WEBFLOW.md). Elle nécessite de supprimer le catalogue caché du
+composant partagé dans Webflow : publier le JavaScript seul ne retire pas le HTML.
+L'attribut `data-ai-search-catalog-url="/chatbot-cartes"` sélectionne la source
+dédiée. Les cartes sont lues à la demande et mises en cache sous forme de texte.
+
+Tests du chargement à la demande (Playwright et Chrome requis) :
+
+```sh
+node --test tests/lazy-cards.test.cjs
+```
+
 La photo des fondateurs utilise l’URL fixe définie dans `foundersImageUrl`.
 Elle s’affiche après le texte de la première réponse sur les fondateurs, Suzanne,
 Martin ou l’origine du projet. L’indicateur reste actif tant que la conversation
