@@ -1,6 +1,6 @@
 # Cartes chargées à la demande — migration du 10 novembre 2026
 
-Le script corrigé fonctionne avec une page dédiée `/chatbot-cartes`, sur le même domaine que le site. Il charge cette page seulement quand une réponse contient des recommandations à afficher en cartes. Le repos, le scroll, le focus, l'attente du webhook, les réponses sans résultat et les précisions en mode `detail` ne chargent pas le catalogue.
+Le script corrigé fonctionne avec une page dédiée `/chatbot-cartes`, sur le même domaine que le site. Il commence à préparer les cartes dès l'envoi d'une question, pendant l'attente du webhook, avec deux requêtes maximum à la fois. Le repos, le scroll et le focus ne chargent pas le catalogue. À la réception de la réponse, la préparation spéculative s'arrête ; seules les cartes nécessaires sont encore recherchées. Les requêtes déjà parties peuvent se terminer, y compris pour une réponse sans cartes.
 
 La correction complète nécessite de retirer la collection de cartes du HTML des pages ordinaires. Mettre son affichage sur `none`, masquer une instance du composant ou désactiver seulement son script ne suffit pas.
 
@@ -75,9 +75,10 @@ Le nouveau script reste compatible avec l'ancienne source embarquée tant qu'auc
 
 ## Comportement et limites
 
-- Une seule page de catalogue est demandée à la fois. La lecture s'arrête dès que toutes les cartes demandées sont trouvées.
+- Pendant l'attente du webhook, les pages sont préparées par lots de deux au maximum. Les requêtes partagées sont dédupliquées. Une fois la réponse reçue, la recherche s'arrête dès que les cartes demandées sont trouvées ; au plus deux requêtes déjà lancées peuvent encore se terminer.
+- Les explications et la conclusion n'attendent plus le carrousel. Celui-ci apparaît à sa place, au-dessus des explications, dès que ses cartes sont disponibles.
 - Les cartes déjà lues sont réutilisées pendant la conversation. Le cache conserve leur HTML sous forme de texte et une structure de carrousel vide, pas les documents complets téléchargés.
-- La limite est de 20 pages de catalogue par instance du chatbot, et de 20 secondes de recherche de cartes par réponse. Avec 100 cartes par page, la capacité normale est de 2 000 cartes maximum. Une réponse peut parcourir plusieurs lots pour trouver une carte éloignée ; ce n'est pas une API de recherche unitaire.
+- La limite est de 20 pages de catalogue par instance du chatbot, avec une préparation de 20 secondes maximum pendant le webhook, puis 20 secondes maximum de recherche de cartes après la réponse. Avec 100 cartes par page, la capacité normale est de 2 000 cartes maximum. Une réponse peut parcourir plusieurs lots pour trouver une carte éloignée ; ce n'est pas une API de recherche unitaire.
 - Une page inaccessible ou une carte absente laisse les explications et les liens de spectacles disponibles. Un échec réseau peut être réessayé à la question suivante.
 - Le chargement à la demande a été testé dans Chromium avec réponses n8n simulées. La disparition du crash sur Safari iOS doit être confirmée après publication du HTML allégé sur l'iPhone réel.
 

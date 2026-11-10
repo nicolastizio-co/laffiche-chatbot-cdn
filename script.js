@@ -137,6 +137,11 @@
     const slidesByTitle = new Map();
     const duplicateTitles = new Set();
     const loadedPages = new Set();
+    const nextPageByUrl = new Map();
+    const pendingPages = new Map();
+    const activeLoads = new Set();
+    const failedPages = new Set();
+    let warmGeneration = 0;
     const catalogOrigin = window.location.origin;
     const maxCatalogPages = 20;
     const catalogBudgetMs = 20000;
@@ -233,13 +238,14 @@
       try { if (next) candidate = new URL(next.getAttribute('href'), pageUrl); } catch {}
       if (candidate) candidate.hash = '';
       loadedPages.add(pageUrl);
-      nextUrl = candidate && candidate.origin === catalogOrigin && candidate.pathname === catalogPath
-        && !candidate.username && !candidate.password && !loadedPages.has(candidate.href)
+      const followingUrl = candidate && candidate.origin === catalogOrigin && candidate.pathname === catalogPath
+        && !candidate.username && !candidate.password && candidate.href !== pageUrl
         ? candidate.href : null;
+      nextPageByUrl.set(pageUrl, followingUrl);
     }
 
     if (useEmbeddedSource && !sourceError) {
-      try { indexPage(document, nextUrl); }
+      try { indexPage(document, nextUrl); nextUrl = nextPageByUrl.get(nextUrl); }
       catch (error) { sourceError = error; }
     }
 
@@ -268,7 +274,7 @@
       return null;
     }
 
-    async function loadNextPage(url, remainingMs) {
+    async function fetchCatalogPage(url, remainingMs) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), Math.min(12000, remainingMs));
       try {
@@ -285,18 +291,91 @@
         const doc = new DOMParser().parseFromString(html, 'text/html');
         indexPage(doc, finalUrl.href);
         loadedPages.add(url);
-        if (loadedPages.has(nextUrl)) nextUrl = null;
+        nextPageByUrl.set(url, nextPageByUrl.get(finalUrl.href));
       } finally { clearTimeout(timeout); }
+    }
+
+    function loadNextPage(url, remainingMs) {
+      if (loadedPages.has(url)) return Promise.resolve();
+      if (pendingPages.has(url)) return pendingPages.get(url);
+      if (failedPages.has(url)) return Promise.reject(Error());
+      const deadline = Date.now() + remainingMs;
+      const promise = (async () => {
+        while (activeLoads.size >= 2) {
+          await Promise.race([...activeLoads].map(task => task.catch(() => {})));
+        }
+        if (Date.now() >= deadline) throw Error();
+        const task = fetchCatalogPage(url, deadline - Date.now());
+        activeLoads.add(task);
+        try { await task; }
+        finally { activeLoads.delete(task); }
+      })().catch(error => { failedPages.add(url); throw error; })
+        .finally(() => pendingPages.delete(url));
+      pendingPages.set(url, promise);
+      return promise;
+    }
+
+    function stopPreparing() { warmGeneration++; }
+
+    function prepareCatalog() {
+      stopPreparing();
+      failedPages.clear();
+      // Seulement après un envoi volontaire, jamais au chargement ou au scroll.
+      // L'ancien catalogue embarqué garde son comportement à la demande.
+      if (useEmbeddedSource || sourceError || !nextUrl) return;
+      const generation = warmGeneration;
+      const deadline = Date.now() + catalogBudgetMs;
+      const active = () => generation === warmGeneration && Date.now() < deadline;
+      const warm = async () => {
+        let cursor = nextUrl;
+        const visited = new Set();
+        while (cursor && loadedPages.has(cursor)) {
+          if (visited.has(cursor)) return;
+          visited.add(cursor);
+          cursor = nextPageByUrl.get(cursor);
+        }
+        if (!cursor || loadedPages.size >= maxCatalogPages || !active()) return;
+        await loadNextPage(cursor, deadline - Date.now());
+        if (!active()) return;
+        const following = nextPageByUrl.get(cursor);
+        if (!following) return;
+        const seed = new URL(following);
+        const entry = [...seed.searchParams].find(([key, value]) => /_page$/.test(key) && /^\d+$/.test(value));
+        if (!entry) return; // Pagination atypique : le lecteur à la demande prend le relais.
+        const [key, value] = entry;
+        let page = Number(value);
+        if (!Number.isSafeInteger(page) || page < 2) return;
+        let lastPage = page + Math.max(0, maxCatalogPages - loadedPages.size - pendingPages.size) - 1;
+        while (active() && page <= lastPage) {
+          const batch = [];
+          for (let slot = 0; slot < 2 && page <= lastPage; slot++) {
+            const current = page++;
+            const target = new URL(seed.href);
+            target.searchParams.set(key, String(current));
+            batch.push(loadNextPage(target.href, deadline - Date.now()).then(() => {
+              if (!nextPageByUrl.get(target.href)) lastPage = Math.min(lastPage, current);
+            }));
+          }
+          // Attendre les deux résultats avant de planifier un nouveau lot :
+          // une fin de catalogue évite de poursuivre la lecture spéculative.
+          await Promise.all(batch);
+        }
+      };
+      void warm().catch(() => {});
     }
 
     async function resolveSlides(shows) {
       const deadline = Date.now() + catalogBudgetMs;
-      // Une requête à la fois, seulement si une recommandation manque ; ni
-      // préchargement à l'envoi, ni lecture spéculative des pages suivantes.
-      while (shows.some(show => !findSlide(show)) && nextUrl && loadedPages.size < maxCatalogPages) {
-        const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0) break;
-        await loadNextPage(nextUrl, remainingMs);
+      const visited = new Set();
+      while (shows.some(show => !findSlide(show)) && nextUrl && !visited.has(nextUrl)) {
+        const url = nextUrl;
+        visited.add(url);
+        if (!loadedPages.has(url)) {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0 || loadedPages.size >= maxCatalogPages) break;
+          await loadNextPage(url, remainingMs);
+        }
+        nextUrl = nextPageByUrl.get(url) || null;
       }
       return shows.map(show => ({ show, slide: findSlide(show) }));
     }
@@ -462,65 +541,80 @@
       let carousel = null;
       let catalogError = sourceError;
 
-      if (showRecommendations && !catalogError) {
-        try {
-          selected = await resolveSlides(results);
-          const found = selected.filter(item => item.slide);
-          if (found.length) carousel = buildSwiper(found, requestId);
-        } catch (error) {
-          catalogError = error;
+      const cardsReady = (async () => {
+        if (showRecommendations && !catalogError) {
+          try {
+            selected = await resolveSlides(results);
+            const found = selected.filter(item => item.slide);
+            if (found.length) carousel = buildSwiper(found, requestId);
+          } catch (error) {
+            catalogError = error;
+            // Une page en erreur ne doit pas faire perdre les cartes déjà trouvées.
+            selected = results.map(show => ({ show, slide: findSlide(show) }));
+            const found = selected.filter(item => item.slide);
+            try { if (found.length) carousel = buildSwiper(found, requestId); }
+            catch (error) { catalogError = error; }
+          }
         }
-      }
+      })();
       await introDone;
       if (!showRecommendations && !conclusion && !showFollowUp && !showFoundersImage) return rendered;
       reply.element.appendChild(layout);
       queueResponseScroll();
 
+      let cardsDone = Promise.resolve();
       if (showRecommendations) {
-        if (carousel) {
-          layout.appendChild(carousel.element);
-          queueResponseScroll();
-          rendered = selected.filter(item => item.slide).length;
-          await new Promise(resolve => requestAnimationFrame(resolve));
-          if (typeof window.Swiper === 'function') {
-            new window.Swiper(carousel.wrap, {
-              slidesPerView: 'auto',
-              spaceBetween: 16,
-              speed: 300,
-              freeMode: { enabled: true, sticky: true },
-              grabCursor: false,
-              a11y: false,
-              navigation: { prevEl: carousel.prev, nextEl: carousel.next },
-              ...(carousel.pagination ? { pagination: {
-                el: carousel.pagination, type: 'bullets', clickable: true,
-              } } : {}),
-            });
-            carousel.wrap.swiper?.update();
+        const cardSlot = document.createElement('div');
+        cardSlot.setAttribute('data-ai-search-card-slot', '');
+        cardSlot.style.minWidth = '0';
+        cardSlot.style.width = '100%';
+        layout.appendChild(cardSlot);
+        cardsDone = (async () => {
+          await cardsReady;
+          if (carousel) {
+            cardSlot.appendChild(carousel.element);
             queueResponseScroll();
+            rendered = selected.filter(item => item.slide).length;
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            if (typeof window.Swiper === 'function') {
+              new window.Swiper(carousel.wrap, {
+                slidesPerView: 'auto',
+                spaceBetween: 16,
+                speed: 300,
+                freeMode: { enabled: true, sticky: true },
+                grabCursor: false,
+                a11y: false,
+                navigation: { prevEl: carousel.prev, nextEl: carousel.next },
+                ...(carousel.pagination ? { pagination: {
+                  el: carousel.pagination, type: 'bullets', clickable: true,
+                } } : {}),
+              });
+              carousel.wrap.swiper?.update();
+              queueResponseScroll();
+            } else {
+              carousel.element.setAttribute('data-ai-search-swiper-status', 'missing-library');
+            }
           } else {
-            carousel.element.setAttribute('data-ai-search-swiper-status', 'missing-library');
+            const fallback = document.createElement('p');
+            fallback.setAttribute('data-ai-search-missing-cards', '');
+            cardSlot.appendChild(fallback);
+            const message = catalogError
+              ? 'Les fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.'
+              : 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.';
+            const messageNode = document.createTextNode('');
+            fallback.appendChild(messageNode);
+            await streamText(messageNode, message, 20);
           }
-          if (!reducedMotion()) await new Promise(resolve => setTimeout(resolve, Math.min(700, 320 + rendered * 115)));
-        } else {
-          const fallback = document.createElement('p');
-          fallback.setAttribute('data-ai-search-missing-cards', '');
-          layout.appendChild(fallback);
-          const message = catalogError
-            ? 'Les fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.'
-            : 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.';
-          const messageNode = document.createTextNode('');
-          fallback.appendChild(messageNode);
-          await streamText(messageNode, message, 20);
-        }
-        const missing = selected.filter(item => !item.slide);
-        if (missing.length && carousel) {
-          const notice = document.createElement('p');
-          notice.setAttribute('data-ai-search-missing-cards', '');
-          const noticeText = document.createTextNode('');
-          notice.appendChild(noticeText);
-          layout.appendChild(notice);
-          await streamText(noticeText, 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez toutes les suggestions ci-dessous.', 20);
-        }
+          const missing = selected.filter(item => !item.slide);
+          if (missing.length && carousel) {
+            const notice = document.createElement('p');
+            notice.setAttribute('data-ai-search-missing-cards', '');
+            const noticeText = document.createTextNode('');
+            notice.appendChild(noticeText);
+            cardSlot.appendChild(notice);
+            await streamText(noticeText, 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez toutes les suggestions ci-dessous.', 20);
+          }
+        })();
         await appendReasons(layout, results);
       }
       if (conclusion) {
@@ -558,8 +652,11 @@
         foundersImageShown = true;
         queueResponseScroll();
       }
+      await cardsDone;
       return rendered;
     };
+    render.prepareCatalog = prepareCatalog;
+    render.stopPreparing = stopPreparing;
     return render;
   }
 
@@ -1083,6 +1180,7 @@
       input.value = '';
       syncMirrors();
       setBusy(true);
+      renderShowCards.prepareCatalog();
       root.setAttribute('data-ai-search-status', 'loading');
       startTimer(startedAt);
       const loadingInterval = setInterval(() => {
@@ -1113,6 +1211,7 @@
           throw Object.assign(Error(), { code: 'network' });
         }
         const body = await response.text();
+        renderShowCards.stopPreparing();
         clearInterval(loadingInterval);
         stopLoadingText(reply);
         if (!response.ok) throw Object.assign(Error(), { status: response.status });
@@ -1157,6 +1256,7 @@
         root.setAttribute('data-ai-search-status', 'error');
         if (!input.value.trim()) { input.value = text; syncMirrors(); }
       } finally {
+        renderShowCards.stopPreparing();
         stopTimer();
         clearInterval(loadingInterval);
         stopLoadingText(reply);

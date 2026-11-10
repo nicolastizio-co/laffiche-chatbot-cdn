@@ -17,7 +17,9 @@ La migration des cartes vers une page dédiée `/chatbot-cartes` est décrite da
 [WEBFLOW.md](WEBFLOW.md). Elle nécessite de supprimer le catalogue caché du
 composant partagé dans Webflow : publier le JavaScript seul ne retire pas le HTML.
 L'attribut `data-ai-search-catalog-url="/chatbot-cartes"` sélectionne la source
-dédiée. Les cartes sont lues à la demande et mises en cache sous forme de texte.
+dédiée. Les cartes sont préparées dès l'envoi de la question, avec deux requêtes
+maximum à la fois, puis mises en cache sous forme de texte. Les explications
+n'attendent pas leur chargement. Aucun catalogue n'est chargé au repos ou au scroll.
 
 Tests du chargement à la demande (Playwright et Chrome requis) :
 
