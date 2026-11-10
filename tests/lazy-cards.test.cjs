@@ -105,6 +105,16 @@ for(const script of scripts) test(`cartes à la demande : ${script}`,async t=>{
     }finally{await h.page.close();}
    }
   });
+  await t.test('un titre absent du résumé est ajouté avec son lien en tête',async()=>{
+   const h=await setup(browser,script,{answer:'Jessica décide de réaliser son rêve.',results:[{webflow_id:'id-meryl',slug:'meryl-streep',title:"J'ai toujours rêvé d'être Meryl Streep ",image_url:'https://example.test/poster.webp'}]});
+   try{
+    await h.submit('meryl','detail');
+    const intro=h.page.locator('[data-ai-search-message="assistant"] [data-ai-search-text]').last();
+    assert.equal(await intro.textContent(),"J'ai toujours rêvé d'être Meryl Streep — Jessica décide de réaliser son rêve.");
+    assert.equal(await intro.locator('a').count(),1);
+    assert.equal(await intro.locator('a').getAttribute('href'),'/spectacles/meryl-streep?utm_source=chatbot');
+   }finally{await h.page.close();}
+  });
   await t.test('un titre partiel est ignoré avant la première mention complète',async()=>{
    const h=await setup(browser,script,{answer:'Looping puis Loop : une histoire.',results:[{webflow_id:'id-loop',slug:'loop',title:'Loop',image_url:'https://example.test/poster.webp'}]});
    try{

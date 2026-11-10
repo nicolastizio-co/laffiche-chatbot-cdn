@@ -81,13 +81,17 @@
       || /[\p{L}\p{N}]/u.test(mapped.folded[match + needle.length] || ''))) {
       match = mapped.folded.indexOf(needle, match + 1);
     }
-    if (match < 0) return;
-    const index = mapped.starts[match], end = mapped.ends[match + needle.length - 1];
+    const index = match < 0 ? 0 : mapped.starts[match];
+    const end = match < 0 ? 0 : mapped.ends[match + needle.length - 1];
     const link = document.createElement('a');
     link.href = href;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.textContent = text.slice(index, end);
+    link.textContent = match < 0 ? title : text.slice(index, end);
+    if (match < 0) {
+      content.prepend(link, document.createTextNode(' — '));
+      return;
+    }
     content.replaceChildren(document.createTextNode(text.slice(0, index)), link,
       document.createTextNode(text.slice(end)));
   }
