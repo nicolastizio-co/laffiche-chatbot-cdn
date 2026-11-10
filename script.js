@@ -6,6 +6,7 @@
     test: 'https://n8n.srv1136783.hstgr.cloud/webhook-test/recherche-ia-webflow',
   };
   const TIMEOUT_MS = 90_000;
+  const SCRIPT_VERSION = '2026-11-11-detail-poster-link';
   function shuffleLoadingMessages(phrases, previousMessage = '') {
     const messages = [...phrases];
     for (let index = messages.length - 1; index > 0; index--) {
@@ -36,6 +37,38 @@
     const content = shortText(value, max);
     return content && !hasInternalCopy(content) ? content : fallback;
   };
+  const detailShow = data => {
+    if (data.criteria?.conversation_mode !== 'detail') return null;
+    const shows = data.results.filter(show => show && typeof show === 'object' && !Array.isArray(show));
+    const target = data.detail_target?.webflow_id;
+    return target ? shows.find(show => (show.webflow_id || show.id) === target) || null
+      : shows.length === 1 ? shows[0] : null;
+  };
+  const showHref = show => {
+    let slug = shortText(show?.slug, 200);
+    if (!slug && show?.url) {
+      try { slug = new URL(show.url, window.location.origin).pathname.match(/^\/spectacles\/([^/]+)\/?$/)?.[1] || ''; }
+      catch { return ''; }
+    }
+    return /^[a-z0-9][a-z0-9-]{0,199}$/i.test(slug) ? `/spectacles/${slug}?utm_source=chatbot` : '';
+  };
+  function linkDetailTitle(content, data) {
+    const show = detailShow(data), href = showHref(show);
+    const title = shortText(show?.title, 200), text = content.textContent;
+    if (!title || !href) return;
+    const index = text.toLocaleLowerCase('fr').indexOf(title.toLocaleLowerCase('fr'));
+    if (index < 0 || /[\p{L}\p{N}]/u.test(text[index - 1] || '')
+      || /[\p{L}\p{N}]/u.test(text[index + title.length] || '')) return;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.style.color = 'inherit';
+    link.style.textDecoration = 'underline';
+    link.textContent = text.slice(index, index + title.length);
+    content.replaceChildren(document.createTextNode(text.slice(0, index)), link,
+      document.createTextNode(text.slice(index + title.length)));
+  }
   function assistantMemory(data) {
     const lines = [`Réponse : ${visitorText(data.answer, 'Voici quelques idées de spectacles.').slice(0, 500)}`];
     if (data.criteria && typeof data.criteria === 'object' && !Array.isArray(data.criteria)) {
@@ -442,9 +475,45 @@
       return slide;
     }
 
+    function detailSlide(show) {
+      const href = showHref(show);
+      let poster;
+      try { poster = new URL(text(show.image_url)); } catch { return null; }
+      if (!href || !['https:', 'http:'].includes(poster.protocol) || poster.username || poster.password) return null;
+      const element = (tag, className, parent) => {
+        const node = document.createElement(tag);
+        node.className = className;
+        parent?.appendChild(node);
+        return node;
+      };
+      const slide = element('div', 'swiper-slide show_item w-dyn-item');
+      slide.setAttribute('role', 'listitem');
+      const wrapper = element('div', 'show_item_wrapper', slide);
+      const link = element('a', 'show_item_link w-inline-block', wrapper);
+      link.href = href;
+      link.setAttribute('aria-label', text(show.title));
+      const content = element('div', 'show_item_content', wrapper);
+      const card = element('div', 'show_card', content);
+      const posterWrap = element('div', 'show_poster_wrapper', card);
+      const img = element('img', 'show_poster_image', posterWrap);
+      img.src = poster.href;
+      img.alt = text(show.title);
+      img.loading = 'eager';
+      img.decoding = 'async';
+      const info = element('div', 'show_card_info-wrapper', card);
+      element('div', 'show_title_small', info).textContent = text(show.title);
+      const details = element('div', 'show_details_wrapper', info);
+      for (const value of [show.venue?.name, show.category]) {
+        if (!text(value)) continue;
+        const row = element('div', 'show_detail_item', details);
+        element('div', 'show_detail_text text-style-2lines', row).textContent = text(value);
+      }
+      return {id: identifier(show), slug: slugOf(show), html: slide.outerHTML};
+    }
+
     function buildSwiper(found, requestId) {
       const template = document.createElement('template');
-      template.innerHTML = shellHtml;
+      template.innerHTML = shellHtml || '<div class="ai_swiper_wrapper"><div class="swiper_wrapper"><div data-swiper-group class="swiper-group"><div data-swiper-wrap class="swiper w-dyn-list"><div role="list" class="swiper-wrapper w-dyn-items"></div></div></div></div></div>';
       const clone = template.content.firstElementChild;
       clone.removeAttribute('data-ai-search-swiper-source');
       clone.setAttribute('data-ai-search-result-swiper', '');
@@ -555,6 +624,14 @@
       let catalogError = sourceError;
 
       const cardsReady = (async () => {
+        if (detailMode && results.length === 1) {
+          const slide = detailSlide(results[0]);
+          if (slide) {
+            selected = [{show: results[0], slide}];
+            carousel = buildSwiper(selected, requestId);
+            return;
+          }
+        }
         if (showRecommendations && !catalogError) {
           try {
             selected = await resolveSlides(results);
@@ -609,11 +686,11 @@
             } else {
               carousel.element.setAttribute('data-ai-search-swiper-status', 'missing-library');
             }
-          } else {
+          } else if (!detailMode) {
             const fallback = document.createElement('p');
             fallback.setAttribute('data-ai-search-missing-cards', '');
             cardSlot.appendChild(fallback);
-            const message = detailMode ? 'L’affiche ne s’affiche pas pour le moment. Les informations du spectacle restent disponibles ci-dessus.' : catalogError
+            const message = catalogError
               ? 'Les fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.'
               : 'Certaines fiches ne s’affichent pas pour le moment. Retrouvez les suggestions ci-dessous.';
             const messageNode = document.createTextNode('');
@@ -621,7 +698,7 @@
             await streamText(messageNode, message, 20);
           }
           const missing = selected.filter(item => !item.slide);
-          if (missing.length && carousel) {
+          if (missing.length && carousel && !detailMode) {
             const notice = document.createElement('p');
             notice.setAttribute('data-ai-search-missing-cards', '');
             const noticeText = document.createTextNode('');
@@ -677,6 +754,7 @@
 
   function init(root) {
     if (root.hasAttribute('data-ai-search-initialized')) return;
+    root.setAttribute('data-ai-search-script-version', SCRIPT_VERSION);
     const find = name => root.querySelector(`[data-ai-search-${name}]`);
     const form = find('form');
     const input = find('question');
@@ -1253,7 +1331,9 @@
         reply.content.replaceChildren(introNode);
         if (data.criteria?.conversation_mode === 'detail') reply.content.style.whiteSpace = 'pre-line';
         reply.content.setAttribute('aria-busy', 'true');
-        const introDone = streamText(introNode, intro, 28).finally(() => reply.content.removeAttribute('aria-busy'));
+        const introDone = streamText(introNode, intro, 28)
+          .then(() => linkDetailTitle(reply.content, data))
+          .finally(() => reply.content.removeAttribute('aria-busy'));
         reply.element.setAttribute('data-ai-search-response-status', (onlyAlternatives ? 'no_results' : data.status) || 'success');
         await renderShowCards(reply, data, requestId, introDone);
         // Le tour suivant reçoit les critères et les raisons, même si le rendu animé continue.

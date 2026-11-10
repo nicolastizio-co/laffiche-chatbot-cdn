@@ -31,6 +31,7 @@ async function setup(browser, script, options = {}) {
   const request = route.request(), url = new URL(request.url());
   if (request.method() === 'OPTIONS') return route.fulfill({headers:{'access-control-allow-origin':'*','access-control-allow-methods':'POST, GET, OPTIONS','access-control-allow-headers':'content-type'},body:''});
   if (request.isNavigationRequest()) return route.fulfill({contentType:'text/html', body:fixture});
+  if (request.resourceType() === 'image') return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="180" height="250"><rect width="180" height="250" fill="red"/></svg>'});
   if (request.method() === 'POST') {
    const payload = request.postDataJSON();
    if (responseMode === 'pending') await new Promise(resolve => { release = resolve; });
@@ -65,6 +66,38 @@ async function setup(browser, script, options = {}) {
 for(const script of scripts) test(`cartes à la demande : ${script}`,async t=>{
  const browser = await chromium.launch({channel:'chrome',headless:true});
  try {
+  await t.test('détail avec affiche directe malgré un catalogue en erreur et lien uniquement sur la première mention',async()=>{
+   const h=await setup(browser,script,{failures:20,answer:'The Loop est une comédie. The Loop dure 1 h 20.',target:'id-loop',results:[{
+    webflow_id:'id-loop',slug:'the-loop',title:'The Loop',image_url:'https://example.test/poster.webp',
+    venue:{name:'Théâtre Saint-Georges'},category:'Comédie',reason:'Les informations du spectacle demandé.',price_from_eur:5,
+   }]});
+   try {
+    await h.submit('loop','detail');
+    const response=h.page.locator('[data-ai-search-message="assistant"]').last();
+    assert.equal(await response.locator('.swiper-slide').count(),1);
+    const poster=response.locator('.swiper-slide img');
+    assert.equal(await poster.getAttribute('alt'),'The Loop');
+    await poster.evaluate(img=>img.decode());
+    const intro=response.locator('[data-ai-search-text]');
+    assert.equal(await intro.locator('a').count(),1);
+    assert.equal(await intro.locator('a').textContent(),'The Loop');
+    assert.equal(await intro.locator('a').getAttribute('href'),'/spectacles/the-loop?utm_source=chatbot');
+    assert.equal(await intro.textContent(),'The Loop est une comédie. The Loop dure 1 h 20.');
+    assert.equal(await response.locator('[data-ai-search-missing-cards], [data-ai-search-reasons]').count(),0);
+    assert.ok(!(await response.textContent()).includes('Les informations du spectacle demandé'));
+   } finally {await h.page.close();}
+  });
+  await t.test('un visuel invalide ne masque pas le texte ni son lien et ne devient pas du HTML',async()=>{
+   const h=await setup(browser,script,{failures:20,answer:'The Loop reste accessible.',results:[{
+    webflow_id:'id-loop',slug:'the-loop',title:'The Loop',image_url:'javascript:alert(1)',
+   }]});
+   try {
+    await h.submit('loop','detail');
+    const response=h.page.locator('[data-ai-search-message="assistant"]').last();
+    assert.equal(await response.locator('img,script,[data-ai-search-missing-cards],[data-ai-search-reasons]').count(),0);
+    assert.equal(await response.locator('[data-ai-search-text] a').textContent(),'The Loop');
+   } finally {await h.page.close();}
+  });
   await t.test('fiche détail : une affiche, sans pagination ni raisons, et texte complet',async()=>{
    const answer='Le spectacle et son histoire. '.repeat(90)+'\n\nDurée : 1 h 35.';
    const h=await setup(browser,script,{answer});

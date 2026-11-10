@@ -38,3 +38,9 @@ avec son affiche, sans flèches, pagination, liste de raisons ni conclusion de
 sélection. Le texte détaillé conserve ses paragraphes (jusqu’à 6 000 caractères).
 En cas de résultats ambigus sans cible, aucune carte n’est choisie arbitrairement.
 Les demandes explicites de spectacles similaires conservent le parcours de sélection.
+
+La fiche détaillée construit sa carte avec `image_url`, `title`, `slug`,
+`venue.name` et `category` renvoyés par n8n, sans attendre la pagination du
+catalogue. Le premier titre cité dans la présentation est lié à sa fiche.
+Un problème de cartes ne produit pas de message de suggestions en mode détail.
+Le tarif transmis par le workflow est conservé.
