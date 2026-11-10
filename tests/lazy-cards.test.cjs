@@ -7,7 +7,7 @@ try { ({ chromium } = require('playwright')); }
 catch { ({ chromium } = require(path.join(require('node:os').homedir(),
   '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'))); }
 const scripts = ['script.js', 'script.min.js'];
-const fixture = `<!doctype html><div data-ai-search data-ai-search-catalog-url="/chatbot-cartes">
+const fixture = `<!doctype html><style>a { color: rgb(220, 10, 64); }</style><div data-ai-search data-ai-search-catalog-url="/chatbot-cartes">
  <button data-ai-search-close>Fermer</button><div data-ai-search-thread>
  <div data-ai-search-template="question"><div data-ai-search-text></div></div>
  <div data-ai-search-template="answer"><div data-ai-search-text></div></div></div>
@@ -81,6 +81,9 @@ for(const script of scripts) test(`cartes à la demande : ${script}`,async t=>{
     const intro=response.locator('[data-ai-search-text]');
     assert.equal(await intro.locator('a').count(),1);
     assert.equal(await intro.locator('a').textContent(),'The Loop');
+    assert.equal(await intro.locator('a').evaluate(a=>getComputedStyle(a).color),'rgb(220, 10, 64)');
+    assert.deepEqual(await response.locator('.show_detail_icon').evaluateAll(icons=>icons.map(icon=>icon.getAttribute('viewBox'))),['0 0 19 19','0 0 20 20']);
+    assert.ok(await response.evaluate(el=>Boolean(el.querySelector('[data-ai-search-card-slot]').compareDocumentPosition(el.querySelector('[data-ai-search-text]')) & Node.DOCUMENT_POSITION_FOLLOWING)));
     assert.equal(await intro.locator('a').getAttribute('href'),'/spectacles/the-loop?utm_source=chatbot');
     assert.equal(await intro.textContent(),'The Loop est une comédie. The Loop dure 1 h 20.');
     assert.equal(await response.locator('[data-ai-search-missing-cards], [data-ai-search-reasons]').count(),0);
@@ -112,6 +115,7 @@ for(const script of scripts) test(`cartes à la demande : ${script}`,async t=>{
     assert.ok((await response.textContent()).includes('Durée : 1 h 35.'));
     await h.submit('b');
     assert.equal(await h.page.locator('[data-ai-search-reasons]').count(),1);
+    assert.ok(await h.page.locator('[data-ai-search-message="assistant"]').last().evaluate(el=>Boolean(el.querySelector('[data-ai-search-text]').compareDocumentPosition(el.querySelector('[data-ai-search-card-slot]')) & Node.DOCUMENT_POSITION_FOLLOWING)));
    } finally {await h.page.close();}
   });
   await t.test('une réponse détail contenant des résultats en trop ne montre que la cible',async()=>{

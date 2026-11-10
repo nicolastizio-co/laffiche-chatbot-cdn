@@ -6,7 +6,7 @@
     test: 'https://n8n.srv1136783.hstgr.cloud/webhook-test/recherche-ia-webflow',
   };
   const TIMEOUT_MS = 90_000;
-  const SCRIPT_VERSION = '2026-11-11-detail-poster-link';
+  const SCRIPT_VERSION = '2026-11-11-detail-layout';
   function shuffleLoadingMessages(phrases, previousMessage = '') {
     const messages = [...phrases];
     for (let index = messages.length - 1; index > 0; index--) {
@@ -63,8 +63,6 @@
     link.href = href;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.style.color = 'inherit';
-    link.style.textDecoration = 'underline';
     link.textContent = text.slice(index, index + title.length);
     content.replaceChildren(document.createTextNode(text.slice(0, index)), link,
       document.createTextNode(text.slice(index + title.length)));
@@ -503,9 +501,13 @@
       const info = element('div', 'show_card_info-wrapper', card);
       element('div', 'show_title_small', info).textContent = text(show.title);
       const details = element('div', 'show_details_wrapper', info);
-      for (const value of [show.venue?.name, show.category]) {
+      // Icônes identiques aux cartes du catalogue Webflow.
+      const icons = ["<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100%\" viewBox=\"0 0 19 19\" fill=\"none\" class=\"show_detail_icon\"><path d=\"M7.8125 6.25V4.48373C7.8125 4.08224 8.05083 3.71638 8.43469 3.59867C9.84166 3.16722 12.3732 2.79478 14.9763 3.59692C15.3715 3.71871 15.625 4.09425 15.625 4.50781V8.55134C15.501 10.128 14.5089 13.2813 11.9048 13.2812C11.5823 13.2812 10.9375 13.2031 10.9375 12.8906\" stroke=\"currentColor\"></path><path d=\"M12.5 6.25C12.7604 6.51042 13.4375 6.875 14.0625 6.25\" stroke=\"currentColor\" stroke-linecap=\"round\"></path><path d=\"M13.2812 10.1562C12.8408 9.65764 11.8042 8.99035 10.7387 9.65231L10.5469 9.76562\" stroke=\"currentColor\" stroke-linecap=\"round\"></path><path d=\"M9.375 6.25C9.63542 6.51042 10.3125 6.875 10.9375 6.25\" stroke=\"currentColor\" stroke-linecap=\"round\"></path><path d=\"M7.22123 6.2018C4.25585 6.87952 2.1002 8.78113 1.24737 9.82802C1.17377 9.91836 1.16731 10.0437 1.22558 10.1446C2.73584 12.7604 4.18068 16.1138 7.16648 16.5705C7.86966 16.678 8.62517 16.5737 9.40338 16.1244C11.6587 14.8224 10.9412 11.5955 10.2602 10.1681L8.23848 6.6663C8.0317 6.30814 7.6244 6.10966 7.22123 6.2018Z\" stroke=\"currentColor\"></path><path d=\"M7.92969 9.25586C7.57395 9.16054 6.80529 9.18334 6.57652 10.0371\" stroke=\"currentColor\" stroke-linecap=\"round\"></path><path d=\"M5.93555 13.6152C6.68138 13.8654 8.2668 13.9031 8.64188 12.0527\" stroke=\"currentColor\" stroke-linecap=\"round\"></path><path d=\"M5.22266 10.8184C4.86692 10.723 4.09826 10.7458 3.86949 11.5996\" stroke=\"currentColor\" stroke-linecap=\"round\"></path></svg>", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100%\" viewBox=\"0 0 20 20\" fill=\"none\" class=\"show_detail_icon\"><path d=\"M8.68561 16.4063L3.41766 11.1384C3.25603 10.9767 3.24669 10.724 3.3968 10.5739L9.32158 4.64913C9.41245 4.55825 9.5462 4.52231 9.67804 4.55331L14.3 5.05126C14.4592 5.08866 14.5873 5.21675 14.6247 5.37592L15.2707 10.1459C15.3016 10.2778 15.2657 10.4115 15.1748 10.5024L9.25007 16.4272C9.09996 16.5773 8.84725 16.568 8.68561 16.4063Z\" stroke=\"currentColor\"></path></svg>"];
+      for (const [index, value] of [show.venue?.name, show.category].entries()) {
         if (!text(value)) continue;
         const row = element('div', 'show_detail_item', details);
+        row.innerHTML = icons[index];
+        row.firstElementChild.setAttribute('aria-hidden', 'true');
         element('div', 'show_detail_text text-style-2lines', row).textContent = text(value);
       }
       return {id: identifier(show), slug: slugOf(show), html: slide.outerHTML};
@@ -614,7 +616,7 @@
         && data.criteria?.knowledge_scope === 'laffiche'
         && Array.isArray(data.criteria.knowledge_topics)
         && data.criteria.knowledge_topics.some(topic => foundersTopics.has(topic));
-      // La réponse doit être empilée avant la première carte et la première puce.
+      // Les recommandations suivent le texte ; une fiche détaillée le précède.
       if (showRecommendations) reply.element.setAttribute('data-ai-search-has-cards', '');
       const layout = document.createElement('div');
       layout.setAttribute('data-ai-search-recommendations', '');
@@ -658,7 +660,8 @@
         cardSlot.setAttribute('data-ai-search-card-slot', '');
         cardSlot.style.minWidth = '0';
         cardSlot.style.width = '100%';
-        layout.appendChild(cardSlot);
+        if (detailMode) reply.element.prepend(cardSlot);
+        else layout.appendChild(cardSlot);
         cardsDone = (async () => {
           await cardsReady;
           if (carousel) {
@@ -745,6 +748,7 @@
         queueResponseScroll();
       }
       await cardsDone;
+      if (!layout.childElementCount) layout.remove();
       return rendered;
     };
     render.prepareCatalog = prepareCatalog;
